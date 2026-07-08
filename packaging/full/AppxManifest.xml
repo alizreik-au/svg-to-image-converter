@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FULL (self-contained) MSIX package for SVG Converter.
+
+  Unlike the sparse manifest in packaging/AppxManifest.xml (which points at
+  externally-installed binaries via uap10:AllowExternalContent), this manifest
+  describes a package that CONTAINS the binaries. scripts/build-installer.ps1
+  stages svg-converter.exe, svg-converterw.exe, svg_converter_shell.dll and the
+  generated logo assets next to this file and runs makeappx to produce a single
+  double-clickable SvgConverter-<version>-x64.msix.
+
+  Why full instead of sparse for the end-user installer:
+    * Real "Installed apps" entry with one-click uninstall (no scripts).
+    * No Developer Mode required (a signed full package sideloads once its
+      certificate is trusted).
+    * Everything - binaries, DLL, COM registration, and the .svg context-menu
+      verb - installs and uninstalls atomically as one unit.
+
+  The single IExplorerCommand handler below serves BOTH:
+    * Windows 11 -> the primary/compact context menu.
+    * Windows 10 (1809+) -> the classic context menu.
+
+  Key pieces:
+    * com:ComServer/com:SurrogateServer  -> registers our CLSID as an in-proc COM
+      server hosted by the packaged surrogate (dllhost.exe).
+    * desktop4:FileExplorerContextMenus  -> attaches the "Convert SVG" verb to .svg.
+
+  The Clsid below MUST match CLSID_CONVERT_SVG in
+  crates/svg-converter-shell/src/lib.rs and the sparse manifest.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  IgnorableNamespaces="uap rescap com desktop4 desktop5">
+
+  <!--
+    Publisher MUST exactly match the subject of the signing certificate.
+    The default below matches the self-signed dev cert created by
+    scripts/build-installer.ps1. For production, change this to your real
+    publisher (e.g. "CN=Contoso Ltd, O=Contoso Ltd, C=US") and sign with a
+    certificate whose subject is identical.
+  -->
+  <Identity
+    Name="SvgConverter.ContextMenu"
+    Publisher="CN=SvgConverter Dev"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>SVG Converter</DisplayName>
+    <PublisherDisplayName>SVG Converter</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- Packaged context-menu handlers need 10.0.17763.0 (1809)+; the Win11
+         primary menu appears on 22000+. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="SvgConverter" Executable="svg-converterw.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="SVG Converter"
+        Description="Convert SVG files to PNG, JPEG, and WebP from the right-click menu."
+        BackgroundColor="#4F46E5"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        AppListEntry="none" />
+
+      <Extensions>
+        <!-- Register the in-proc COM server (hosted by the packaged surrogate). -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="SVG Converter context menu">
+              <com:Class
+                Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70"
+                Path="svg_converter_shell.dll"
+                ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <!-- Attach the "Convert SVG" verb to .svg files (Win10 classic + Win11 primary). -->
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type=".svg">
+              <desktop5:Verb Id="ConvertSvg" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

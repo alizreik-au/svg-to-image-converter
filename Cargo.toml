@@ -1,0 +1,58 @@
+[package]
+name = "svg-converter"
+version = "0.1.0"
+edition = "2021"
+description = "Convert SVG files to PNG, JPEG, and WebP from the Windows context menu"
+authors = ["Ali Zreik"]
+license = "MIT"
+readme = "README.md"
+
+[workspace]
+members = ["crates/svg-converter-shell"]
+resolver = "2"
+
+# Shared conversion core. Both binaries below are thin wrappers over this lib so
+# the CLI and the context-menu path always behave identically.
+[lib]
+name = "svg_converter"
+path = "src/lib.rs"
+
+# Console entry point (keeps stderr logging for terminal use).
+[[bin]]
+name = "svg-converter"
+path = "src/main.rs"
+
+# No-console (GUI-subsystem) entry point used by the context menu to avoid the
+# console-window flash. Auto-detected from src/bin, declared here for clarity.
+[[bin]]
+name = "svg-converterw"
+path = "src/bin/svg-converterw.rs"
+
+[dependencies]
+# Rendering (Phase 1)
+resvg = "0.47"
+usvg = "0.47"
+tiny-skia = "0.12"
+
+# Encoding (Phase 1)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# CLI (Phase 1)
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Windows-only: message-box error reporting for the no-console binary (Phase 4).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true

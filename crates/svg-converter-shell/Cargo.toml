@@ -1,0 +1,32 @@
+[package]
+name = "svg-converter-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Windows 11 IExplorerCommand context-menu handler for SVG Converter"
+authors = ["Ali Zreik"]
+license = "MIT"
+publish = false
+
+# In-process COM server (loaded by the packaged surrogate host, dllhost.exe).
+[lib]
+name = "svg_converter_shell"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The shared conversion core, linked STATICALLY into the cdylib. The handler
+# converts in-process (no child exe), so it never needs to locate or launch a
+# packaged executable under C:\Program Files\WindowsApps (whose ACLs deny a
+# direct CreateProcessW). Both exes and this DLL call the same lib API.
+svg-converter = { path = "../.." }
+
+[target.'cfg(windows)'.dependencies]
+# windows-core is required directly: the #[implement] macro expands to
+# `windows_core::` paths, so the crate must be nameable in this crate.
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

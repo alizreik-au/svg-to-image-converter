@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparse (external-location) MSIX package for SVG Converter.
+
+  This package grants package identity to the existing, externally-installed
+  svg-converter binaries so the Windows 11 primary context menu can load our
+  IExplorerCommand handler (svg_converter_shell.dll). It does NOT contain the
+  binaries themselves - they live in the "external location" chosen at
+  registration time (see scripts/install-sparse-package.ps1).
+
+  Key pieces:
+    * Properties/uap10:AllowExternalContent = true  -> allow referencing files
+      outside the package (the external location).
+    * com:ComServer/com:SurrogateServer             -> registers our CLSID as an
+      in-proc COM server hosted by the packaged surrogate (dllhost.exe).
+    * desktop4:FileExplorerContextMenus             -> attaches the verb to .svg.
+
+  The Clsid below MUST match CLSID_CONVERT_SVG in
+  crates/svg-converter-shell/src/lib.rs.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  IgnorableNamespaces="uap uap10 rescap com desktop4 desktop5">
+
+  <!--
+    Publisher MUST exactly match the subject of the signing certificate.
+    The default below matches the self-signed dev cert created by
+    scripts/build-sparse-package.ps1. Change both together for production.
+  -->
+  <Identity
+    Name="SvgConverter.ContextMenu"
+    Publisher="CN=SvgConverter Dev"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>SVG Converter</DisplayName>
+    <PublisherDisplayName>SVG Converter</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- Allow the manifest to reference files in the external location. -->
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+
+  <Dependencies>
+    <!-- Sparse packages require 10.0.19041.0+; the Win11 primary menu needs 22000+. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="SvgConverter" Executable="svg-converterw.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="SVG Converter"
+        Description="Convert SVG files to PNG, JPEG, and WebP from the right-click menu."
+        BackgroundColor="#4F46E5"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        AppListEntry="none" />
+
+      <Extensions>
+        <!-- Register the in-proc COM server (hosted by the packaged surrogate). -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="SVG Converter context menu">
+              <com:Class
+                Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70"
+                Path="svg_converter_shell.dll"
+                ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <!-- Attach the "Convert SVG" verb to .svg files in the primary menu. -->
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type=".svg">
+              <desktop5:Verb Id="ConvertSvg" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+
+      <!-- Required for a desktop app referenced from an external location. -->
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
