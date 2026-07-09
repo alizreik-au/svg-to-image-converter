@@ -67,18 +67,36 @@ pub fn is_enabled() -> bool {
 }
 
 /// Append one line to the log file, tagged with `source`. No-op unless enabled.
+///
+/// Writes to `%LOCALAPPDATA%\SvgConverter\logs\` first, then falls back to
+/// `%TEMP%\SvgConverter\` if the primary path fails (the packaged COM surrogate
+/// can load our DLL before user env vars are fully available).
 pub fn log(source: &str, message: &str) {
     if !is_enabled() {
         return;
     }
-    let _ = write_line(source, message);
+    if let Some(path) = log_path() {
+        if write_line_at(&path, source, message).is_ok() {
+            return;
+        }
+    }
+    if let Some(path) = temp_log_path() {
+        let _ = write_line_at(&path, source, message);
+    }
 }
 
-fn write_line(source: &str, message: &str) -> std::io::Result<()> {
-    let dir = log_dir()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA not set"))?;
-    fs::create_dir_all(&dir)?;
-    let path = dir.join("svg-converter.log");
+fn temp_log_path() -> Option<PathBuf> {
+    let temp = std::env::var_os("TEMP")?;
+    let mut path = PathBuf::from(temp);
+    path.push("SvgConverter");
+    path.push("svg-converter.log");
+    Some(path)
+}
+
+fn write_line_at(path: &PathBuf, source: &str, message: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)

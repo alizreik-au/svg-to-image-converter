@@ -47,7 +47,7 @@
   <Identity
     Name="SvgConverter.ContextMenu"
     Publisher="CN=SvgConverter Dev"
-    Version="1.0.0.0"
+    Version="1.0.1.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
@@ -60,6 +60,8 @@
     <!-- Packaged context-menu handlers need 10.0.17763.0 (1809)+; the Win11
          primary menu appears on 22000+. -->
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+    <!-- Ensures VC++ runtime is present when the surrogate loads our DLL. -->
+    <PackageDependency Name="Microsoft.VCLibs.140.00.UWPDesktop" MinVersion="14.0.33728.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
   </Dependencies>
 
   <Resources>
@@ -77,23 +79,44 @@
         AppListEntry="none" />
 
       <Extensions>
-        <!-- Register the in-proc COM server (hosted by the packaged surrogate). -->
+        <!-- One COM class per manifest verb (flat menu). See packaging/context-menu-manifest-snippet.xml -->
         <com:Extension Category="windows.comServer">
           <com:ComServer>
             <com:SurrogateServer DisplayName="SVG Converter context menu">
-              <com:Class
-                Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70"
-                Path="svg_converter_shell.dll"
-                ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A71" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A72" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A73" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A74" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A75" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A76" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A77" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A78" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A79" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7A" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7B" Path="svg_converter_shell.dll" ThreadingModel="STA" />
+              <com:Class Id="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7C" Path="svg_converter_shell.dll" ThreadingModel="STA" />
             </com:SurrogateServer>
           </com:ComServer>
         </com:Extension>
 
-        <!-- Attach the "Convert SVG" verb to .svg files (Win10 classic + Win11 primary). -->
+        <!-- Flat verbs: each directly invokes its CLSID (no EnumSubCommands flyout). -->
         <desktop4:Extension Category="windows.fileExplorerContextMenus">
           <desktop4:FileExplorerContextMenus>
             <desktop5:ItemType Type=".svg">
-              <desktop5:Verb Id="ConvertSvg" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70" />
+              <desktop5:Verb Id="QuickPng1x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70" />
+              <desktop5:Verb Id="Png3x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A71" />
+              <desktop5:Verb Id="Png2x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A72" />
+              <desktop5:Verb Id="Png1x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A73" />
+              <desktop5:Verb Id="Png05x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A74" />
+              <desktop5:Verb Id="Jpeg3x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A75" />
+              <desktop5:Verb Id="Jpeg2x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A76" />
+              <desktop5:Verb Id="Jpeg1x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A77" />
+              <desktop5:Verb Id="Jpeg05x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A78" />
+              <desktop5:Verb Id="Webp3x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A79" />
+              <desktop5:Verb Id="Webp2x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7A" />
+              <desktop5:Verb Id="Webp1x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7B" />
+              <desktop5:Verb Id="Webp05x" Clsid="B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7C" />
             </desktop5:ItemType>
           </desktop4:FileExplorerContextMenus>
         </desktop4:Extension>

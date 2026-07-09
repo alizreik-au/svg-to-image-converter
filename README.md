@@ -128,7 +128,7 @@ The compact menu shown on first right-click can only be extended by an `IExplore
 
 ### Architecture
 
-- **`svg_converter_shell.dll`** (crate `crates/svg-converter-shell`) implements `IExplorerCommand` with the `windows` crate (windows-rs). The top-level **Convert SVG** command reports `ECF_HASSUBCOMMANDS` and exposes the format × scale matrix (plus **Quick: PNG (1×)**) via `IExplorerCommand::EnumSubCommands`.
+- **`svg_converter_shell.dll`** (crate `crates/svg-converter-shell`) implements `IExplorerCommand` with the `windows` crate (windows-rs). **Each** format×scale action is a separate manifest-registered verb with its own CLSID (flat Win11 menu — no `EnumSubCommands` flyout, which Win11 often fails to invoke).
 - The DLL is an in-process COM server hosted by the packaged **surrogate** (`dllhost.exe`) via `com:SurrogateServer`.
 - On invoke, each leaf **converts in-process** by calling `svg_converter::convert_menu_batch(...)` — the DLL links the shared `svg_converter` conversion core **statically**, so a right-click produces exactly the same output as `svg-converter convert … -f <fmt> -s <scale>` with **no child process**. This is required for MSIX: the binaries live under `C:\Program Files\WindowsApps\…`, whose ACLs deny launching the packaged exe by path (`CreateProcessW` → `ERROR_ACCESS_DENIED`), which is why an earlier "shell out to `svg-converterw.exe`" design made the menu silently do nothing. Multi-selection is converted item-by-item and errors are aggregated into one message box.
 - The `AppxManifest.xml` uses `desktop4:FileExplorerContextMenus` (attach to `.svg`) + `com:ComServer` (register the CLSID), with `uap10:AllowExternalContent` so the manifest can reference the external binaries. The CLSID in the manifest matches `CLSID_CONVERT_SVG` in the DLL.
@@ -205,17 +205,9 @@ diagnostics to tell **CLI broken** apart from **handler wiring broken**:
 .\scripts\diagnose.ps1 -DisableLogging    # turn it back off when done
 ```
 
-**How logging works.** Diagnostics are opt-in and off by default (normal use
-writes nothing). They turn on when either the environment variable
-`SVG_CONVERTER_LOG` is truthy **or** the sentinel file
-`%LOCALAPPDATA%\SvgConverter\diagnostics.on` exists (the sentinel takes effect
-immediately, with no Explorer restart). Both the in-process DLL handler (MSIX
-menu) and `svg-converterw.exe` (legacy registry menu) append to
-`%LOCALAPPDATA%\SvgConverter\logs\svg-converter.log`. The DLL records each
-in-process conversion (format/scale, per-file result, exit reason); the exe
-records the full command line, working directory, and any error — including
-clap argument-parse errors that the no-console exe would otherwise swallow
-silently.
+**How logging works.** Diagnostics are opt-in and off by default. They turn on when either `SVG_CONVERTER_LOG` is truthy **or** the sentinel file `%LOCALAPPDATA%\SvgConverter\diagnostics.on` exists. Logs go to `%LOCALAPPDATA%\SvgConverter\logs\svg-converter.log` with a `%TEMP%\SvgConverter\` fallback when the surrogate cannot write to AppData.
+
+**Interpreting `[dll]` lines:** After right-clicking a `.svg` and choosing **Quick: PNG (1×)** (or any flat verb in package 1.0.1.0+), you should see `[dll] DllGetClassObject`, `GetTitle`, and `Invoke` lines. Zero `[dll]` lines means the packaged handler never loaded — uninstall the old package, reinstall 1.0.1.0+, restart Explorer. If you still see a single **Convert SVG** flyout, you are on the old package (Win11 often never calls `Invoke` on flyout subcommands).
 
 ## Stack
 

@@ -40,6 +40,14 @@
     (Classic mode) Folder containing the binaries to install. Default: the 'bin'
     folder beside this script, falling back to the repo's target\release.
 
+.PARAMETER WithLegacyMenu
+    (Msix mode) Also register the registry-based "Show more options" cascade menu
+    using binaries copied to %LOCALAPPDATA%\Programs\SvgConverter. On by default
+    for reliability when the packaged Win11 handler is slow to refresh.
+
+.PARAMETER SkipLegacyMenu
+    (Msix mode) Do not register the registry fallback menu.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\Install-SvgConverter.ps1
     # Recommended: installs the signed MSIX for the current user.
@@ -58,7 +66,9 @@ param(
 
     [string] $MsixPath,
     [string] $CertPath,
-    [string] $BinDir
+    [string] $BinDir,
+    [switch] $WithLegacyMenu,
+    [switch] $SkipLegacyMenu
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +112,31 @@ function Invoke-Elevated {
     }
 }
 
+function Install-LegacyMenuFallback {
+  param([string] $SourceBinDir)
+
+  $menuScript = @(
+    (Join-Path $scriptDir 'install-context-menu.ps1'),
+    (Join-Path $scriptDir 'scripts\install-context-menu.ps1')
+  ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if (-not $menuScript) {
+    Write-Warning 'install-context-menu.ps1 not found; skipping legacy menu fallback.'
+    return
+  }
+
+  $installDir = Join-Path $env:LOCALAPPDATA 'Programs\SvgConverter'
+  New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+  foreach ($name in @('svg-converter.exe', 'svg-converterw.exe', 'svg_converter_shell.dll')) {
+    $src = Join-Path $SourceBinDir $name
+    if (Test-Path -LiteralPath $src) {
+      Copy-Item -LiteralPath $src -Destination $installDir -Force
+    }
+  }
+  & $menuScript -InstallDir $installDir -PerUser
+  Write-Host "Legacy registry menu registered at: $installDir"
+  Write-Host '(Win11: under "Show more options" -> Convert SVG.)'
+}
+
 function Install-Msix {
     # --- Locate the package + optional cert ---
     if (-not $MsixPath) { $MsixPath = Find-Single -Dir $scriptDir -Pattern 'SvgConverter-*.msix' }
@@ -139,9 +174,24 @@ Import-Certificate -FilePath '$cerEsc' -CertStoreLocation 'Cert:\LocalMachine\Tr
 
     Write-Host ''
     Write-Host 'SVG Converter installed.'
-    Write-Host 'Right-click any .svg file -> Convert SVG.'
+    Write-Host 'Right-click any .svg file -> look for Quick: PNG (1x) and other Convert actions.'
     Write-Host 'If the menu does not appear immediately, restart Explorer:  Stop-Process -Name explorer -Force'
     Write-Host 'To uninstall: Settings > Apps > Installed apps > SVG Converter, or run Uninstall-SvgConverter.ps1.'
+
+    $wantLegacy = (-not $SkipLegacyMenu) -and ($WithLegacyMenu -or -not $PSBoundParameters.ContainsKey('WithLegacyMenu'))
+    if ($wantLegacy) {
+      $legacyBin = @(
+        (Join-Path $scriptDir 'bin'),
+        (Join-Path (Split-Path -Parent $scriptDir) 'target\release')
+      ) | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'svg-converter.exe') } | Select-Object -First 1
+      if ($legacyBin) {
+        Write-Host ''
+        Write-Host 'Registering legacy registry menu fallback (Show more options)...'
+        Install-LegacyMenuFallback -SourceBinDir $legacyBin
+      } else {
+        Write-Warning 'Legacy menu fallback skipped: bin\ folder with svg-converter.exe not found beside installer.'
+      }
+    }
 }
 
 function Install-Classic {

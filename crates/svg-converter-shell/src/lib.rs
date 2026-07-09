@@ -1,89 +1,56 @@
 //! Windows 11 primary-menu integration for SVG Converter.
 //!
-//! This crate builds an in-process COM server (`svg_converter_shell.dll`) that
-//! implements [`IExplorerCommand`]. Registered through a sparse or full MSIX
-//! package (see `packaging/`), it adds a **Convert SVG** flyout to the Windows
-//! 11 compact context menu (and the Windows 10 classic menu) for `.svg` files.
-//!
-//! Architecture:
-//! - The top-level command reports `ECF_HASSUBCOMMANDS` and exposes the
-//!   format × scale matrix (plus a Quick PNG 1× default) via
-//!   [`IExplorerCommand::EnumSubCommands`].
-//! - Each leaf command performs the conversion **in-process** by calling
-//!   [`svg_converter::convert_menu_batch`] — the exact same core the CLI uses.
-//!
-//! ## Why in-process (and not a child exe)
-//!
-//! Earlier revisions shelled out to `svg-converterw.exe` via `CreateProcessW`.
-//! When installed as an MSIX, the binaries live under
-//! `C:\Program Files\WindowsApps\…`, whose ACLs deny launching the packaged exe
-//! by path from the surrogate — `CreateProcessW` fails with
-//! `ERROR_ACCESS_DENIED (5)`, so the menu silently did nothing. Linking the
-//! conversion core statically into this DLL and converting in-process removes
-//! the subprocess entirely: it is faster, avoids the WindowsApps-exec problem,
-//! and needs no runtime executable lookup.
+//! Each context-menu action is a **manifest-registered** `IExplorerCommand` with
+//! its own CLSID (see [`commands::COMMAND_DEFS`]). Win11 reliably calls
+//! `Invoke` only for verbs declared in the Appx manifest — flyout subcommands
+//! created via `EnumSubCommands` are displayed but `Invoke` is often never
+//! called, which looks like "nothing happens" with zero `[dll]` diagnostics.
 
 #![cfg(windows)]
+
+mod commands;
 
 use std::ffi::c_void;
 use std::iter::once;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use svg_converter::cli::{Format, Scale};
+use commands::{find_command, CommandDef};
 use svg_converter::{convert_menu_batch, diag, RunOutcome};
 
-use windows::core::{implement, Error, Interface, Ref, Result, GUID, HRESULT, PCWSTR, PWSTR};
+use windows::core::{implement, Error, Interface, Ref, Result, BOOL, GUID, HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_FAIL, E_NOTIMPL, E_POINTER, HMODULE,
-    S_FALSE, S_OK,
+    CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_FAIL, E_NOTIMPL, E_POINTER, HINSTANCE,
+    HMODULE, S_FALSE, TRUE,
 };
 use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx, IClassFactory, IClassFactory_Impl};
 use windows::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
     GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 };
+use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows::Win32::UI::Shell::{
-    IEnumExplorerCommand, IEnumExplorerCommand_Impl, IExplorerCommand, IExplorerCommand_Impl,
-    IShellItemArray, SHStrDupW, SIGDN_FILESYSPATH,
+    IExplorerCommand, IExplorerCommand_Impl, IShellItemArray, SHStrDupW, SIGDN_FILESYSPATH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND};
 
-/// CLSID of the Convert SVG explorer command. Must match the `Clsid`/`Id`
-/// attributes in the MSIX manifests under `packaging/`.
-const CLSID_CONVERT_SVG: GUID = GUID::from_u128(0xb6e3a1c2_9f47_4d5e_8a1b_2c3d4e5f6a70);
-
-/// `ECF_HASSUBCOMMANDS` from `EXPCMDFLAGS`: this command owns a subcommand flyout.
-const ECF_HASSUBCOMMANDS: u32 = 0x0000_0010;
-/// `ECF_DEFAULT`: a plain, invokable command.
+/// `ECF_DEFAULT`: a plain, invokable command (no flyout).
 const ECF_DEFAULT: u32 = 0x0000_0000;
 /// `ECS_ENABLED` from `EXPCMDSTATE`: the command is shown and clickable.
 const ECS_ENABLED: u32 = 0x0000_0000;
 
-/// A concrete conversion (format + scale) run in-process by the core library.
-#[derive(Clone, Copy)]
-struct Action {
-    format: Format,
-    scale: Scale,
-}
-
-/// One entry in the Explorer context menu: either the top-level flyout
-/// (`action == None`, `has_subcommands == true`) or a leaf command.
+/// One manifest-registered leaf command that converts in-process on `Invoke`.
 #[implement(IExplorerCommand)]
 struct ExplorerCommand {
-    /// Null-terminated UTF-16 menu label.
-    title: Vec<u16>,
-    /// Null-terminated UTF-16 icon reference (`"<path>,0"`); length ≤ 1 means none.
+    def: CommandDef,
     icon: Vec<u16>,
-    has_subcommands: bool,
-    action: Option<Action>,
 }
 
 #[allow(non_snake_case)]
 impl IExplorerCommand_Impl for ExplorerCommand_Impl {
     fn GetTitle(&self, _items: Ref<'_, IShellItemArray>) -> Result<PWSTR> {
-        unsafe { SHStrDupW(PCWSTR(self.title.as_ptr())) }
+        diag::log("dll", &format!("GetTitle: {}", self.def.title));
+        unsafe { SHStrDupW(PCWSTR(wide(self.def.title).as_ptr())) }
     }
 
     fn GetIcon(&self, _items: Ref<'_, IShellItemArray>) -> Result<PWSTR> {
@@ -98,7 +65,8 @@ impl IExplorerCommand_Impl for ExplorerCommand_Impl {
     }
 
     fn GetCanonicalName(&self) -> Result<GUID> {
-        Ok(GUID::zeroed())
+        // Unique per verb — required for Explorer to route Invoke correctly.
+        Ok(self.def.clsid)
     }
 
     fn GetState(
@@ -106,23 +74,16 @@ impl IExplorerCommand_Impl for ExplorerCommand_Impl {
         _items: Ref<'_, IShellItemArray>,
         _slow: windows::core::BOOL,
     ) -> Result<u32> {
+        diag::log("dll", &format!("GetState: {}", self.def.verb_id));
         Ok(ECS_ENABLED)
     }
 
     fn GetFlags(&self) -> Result<u32> {
-        Ok(if self.has_subcommands {
-            ECF_HASSUBCOMMANDS
-        } else {
-            ECF_DEFAULT
-        })
+        Ok(ECF_DEFAULT)
     }
 
-    fn EnumSubCommands(&self) -> Result<IEnumExplorerCommand> {
-        if !self.has_subcommands {
-            return Err(Error::from(E_NOTIMPL));
-        }
-        let items = build_subcommands(&self.icon);
-        Ok(CommandEnum::new(items).into())
+    fn EnumSubCommands(&self) -> Result<windows::Win32::UI::Shell::IEnumExplorerCommand> {
+        Err(Error::from(E_NOTIMPL))
     }
 
     fn Invoke(
@@ -130,16 +91,15 @@ impl IExplorerCommand_Impl for ExplorerCommand_Impl {
         psiitemarray: Ref<'_, IShellItemArray>,
         _pbc: Ref<'_, IBindCtx>,
     ) -> Result<()> {
-        let action = match &self.action {
-            Some(action) => *action,
-            // Top-level flyout: Explorer opens the submenu instead of invoking.
-            None => return Ok(()),
-        };
+        diag::log(
+            "dll",
+            &format!(
+                "Invoke start: verb={} format={:?} scale={:?}",
+                self.def.verb_id, self.def.format, self.def.scale
+            ),
+        );
 
         let array = psiitemarray.ok()?;
-
-        // Collect the selected filesystem paths (Explorer invokes once per verb
-        // even for multi-selection, but a selection can contain several items).
         let count = unsafe { array.GetCount()? };
         let mut inputs: Vec<PathBuf> = Vec::with_capacity(count as usize);
         for i in 0..count {
@@ -153,127 +113,32 @@ impl IExplorerCommand_Impl for ExplorerCommand_Impl {
 
         diag::log(
             "dll",
-            &format!(
-                "Invoke in-process: format={:?} scale={:?} on {} file(s): {:?}",
-                action.format,
-                action.scale,
-                inputs.len(),
-                inputs
-            ),
+            &format!("Invoke converting {} file(s): {:?}", inputs.len(), inputs),
         );
 
-        // Convert in-process using the shared core (no child process).
-        let outcome = convert_menu_batch(&inputs, action.format, action.scale);
+        let outcome = convert_menu_batch(&inputs, self.def.format, self.def.scale);
         log_outcome(&outcome);
 
         if !outcome.errors.is_empty() {
             report_outcome(&outcome);
         }
 
+        diag::log(
+            "dll",
+            &format!("Invoke done: exit_code={}", outcome.exit_code),
+        );
         Ok(())
     }
 }
 
-/// Record a menu conversion's result to the shared diagnostics log (no-op
-/// unless logging is enabled). Mirrors the exe-side logging so a single toggle
-/// captures both menu mechanisms.
-fn log_outcome(outcome: &RunOutcome) {
-    if !diag::is_enabled() {
-        return;
-    }
-    for line in &outcome.successes {
-        diag::log("dll", &format!("ok: {line}"));
-    }
-    for line in &outcome.errors {
-        diag::log("dll", &format!("err: {line}"));
-    }
-    diag::log("dll", &format!("exit_code={}", outcome.exit_code));
-}
-
-/// Show a modal error dialog summarizing every failed conversion, so failures
-/// are visible instead of vanishing when Explorer discards our `HRESULT`.
-fn report_outcome(outcome: &RunOutcome) {
-    let mut body = String::from("SVG Converter could not convert the following:\r\n\r\n");
-    body.push_str(&outcome.errors.join("\r\n"));
-    if !outcome.successes.is_empty() {
-        body.push_str(&format!(
-            "\r\n\r\n{} file(s) converted successfully.",
-            outcome.successes.len()
-        ));
-    }
-    report_failure(&body);
-}
-
-/// Enumerator handed to Explorer to walk the subcommand flyout.
-#[implement(IEnumExplorerCommand)]
-struct CommandEnum {
-    items: Vec<IExplorerCommand>,
-    index: AtomicUsize,
-}
-
-impl CommandEnum {
-    fn new(items: Vec<IExplorerCommand>) -> Self {
-        Self {
-            items,
-            index: AtomicUsize::new(0),
-        }
-    }
-}
-
-#[allow(non_snake_case)]
-impl IEnumExplorerCommand_Impl for CommandEnum_Impl {
-    fn Next(
-        &self,
-        celt: u32,
-        puicommand: *mut Option<IExplorerCommand>,
-        pceltfetched: *mut u32,
-    ) -> HRESULT {
-        if puicommand.is_null() {
-            return E_POINTER;
-        }
-        let mut fetched = 0usize;
-        let mut idx = self.index.load(Ordering::SeqCst);
-        while fetched < celt as usize && idx < self.items.len() {
-            unsafe { *puicommand.add(fetched) = Some(self.items[idx].clone()) };
-            fetched += 1;
-            idx += 1;
-        }
-        self.index.store(idx, Ordering::SeqCst);
-        if !pceltfetched.is_null() {
-            unsafe { *pceltfetched = fetched as u32 };
-        }
-        if fetched == celt as usize {
-            S_OK
-        } else {
-            S_FALSE
-        }
-    }
-
-    fn Skip(&self, celt: u32) -> Result<()> {
-        self.index.fetch_add(celt as usize, Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn Reset(&self) -> Result<()> {
-        self.index.store(0, Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn Clone(&self) -> Result<IEnumExplorerCommand> {
-        let clone = CommandEnum {
-            items: self.items.clone(),
-            index: AtomicUsize::new(self.index.load(Ordering::SeqCst)),
-        };
-        Ok(clone.into())
-    }
-}
-
-/// COM class factory that produces the top-level Convert SVG command.
+/// COM class factory for one manifest-registered CLSID.
 #[implement(IClassFactory)]
-struct Factory;
+struct ClassFactory {
+    clsid: GUID,
+}
 
 #[allow(non_snake_case)]
-impl IClassFactory_Impl for Factory_Impl {
+impl IClassFactory_Impl for ClassFactory_Impl {
     fn CreateInstance(
         &self,
         punkouter: Ref<'_, windows::core::IUnknown>,
@@ -287,7 +152,21 @@ impl IClassFactory_Impl for Factory_Impl {
         if !punkouter.is_null() {
             return Err(Error::from(CLASS_E_NOAGGREGATION));
         }
-        let command: IExplorerCommand = root_command();
+
+        let def = find_command(self.clsid).ok_or_else(|| Error::from(E_FAIL))?;
+        diag::log(
+            "dll",
+            &format!(
+                "CreateInstance: verb={} clsid={:?}",
+                def.verb_id, self.clsid
+            ),
+        );
+
+        let command: IExplorerCommand = ExplorerCommand {
+            def: *def,
+            icon: icon_reference(),
+        }
+        .into();
         unsafe { command.query(riid, ppvobject).ok() }
     }
 
@@ -296,7 +175,7 @@ impl IClassFactory_Impl for Factory_Impl {
     }
 }
 
-/// COM entry point: hand Explorer a class factory for our CLSID.
+/// COM entry point: hand Explorer a class factory for a manifest-registered CLSID.
 ///
 /// # Safety
 /// Called by the COM runtime with valid out-pointers.
@@ -313,10 +192,19 @@ extern "system" fn DllGetClassObject(
     if rclsid.is_null() || riid.is_null() {
         return E_POINTER;
     }
-    if unsafe { *rclsid } != CLSID_CONVERT_SVG {
+
+    let clsid = unsafe { *rclsid };
+    let known = find_command(clsid).is_some();
+    diag::log(
+        "dll",
+        &format!("DllGetClassObject: clsid={:?} known={known}", clsid),
+    );
+
+    if !known {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
-    let factory: IClassFactory = Factory.into();
+
+    let factory: IClassFactory = ClassFactory { clsid }.into();
     unsafe { factory.query(riid, ppv) }
 }
 
@@ -327,56 +215,41 @@ extern "system" fn DllCanUnloadNow() -> HRESULT {
     S_FALSE
 }
 
-/// Build the top-level "Convert SVG" flyout command.
-fn root_command() -> IExplorerCommand {
-    ExplorerCommand {
-        title: wide("Convert SVG"),
-        icon: icon_reference(),
-        has_subcommands: true,
-        action: None,
+/// Best-effort log when the surrogate loads our DLL (gated by diagnostics).
+#[no_mangle]
+#[allow(non_snake_case)]
+extern "system" fn DllMain(_module: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
+    if reason == DLL_PROCESS_ATTACH {
+        diag::log("dll", "DllMain: PROCESS_ATTACH (handler DLL loaded)");
     }
-    .into()
+    TRUE
 }
 
-/// Build the flat subcommand list: Quick PNG 1×, then the format × scale matrix.
-fn build_subcommands(icon: &[u16]) -> Vec<IExplorerCommand> {
-    let formats: [(&str, Format); 3] = [
-        ("PNG", Format::Png),
-        ("JPEG", Format::Jpeg),
-        ("WebP", Format::Webp),
-    ];
-    let scales: [(&str, Scale); 4] = [
-        ("3.0\u{00d7}", Scale::Three),
-        ("2.0\u{00d7}", Scale::Two),
-        ("1.0\u{00d7}", Scale::One),
-        ("0.5\u{00d7}", Scale::Half),
-    ];
-
-    let mut commands = Vec::with_capacity(1 + formats.len() * scales.len());
-    commands.push(leaf(
-        "Quick: PNG (1\u{00d7})",
-        Format::Png,
-        Scale::One,
-        icon,
-    ));
-    for (flabel, format) in formats {
-        for (slabel, scale) in scales {
-            let title = format!("{flabel} \u{2014} {slabel}");
-            commands.push(leaf(&title, format, scale, icon));
-        }
+/// Record a menu conversion's result to the shared diagnostics log.
+fn log_outcome(outcome: &RunOutcome) {
+    if !diag::is_enabled() {
+        return;
     }
-    commands
+    for line in &outcome.successes {
+        diag::log("dll", &format!("ok: {line}"));
+    }
+    for line in &outcome.errors {
+        diag::log("dll", &format!("err: {line}"));
+    }
+    diag::log("dll", &format!("exit_code={}", outcome.exit_code));
 }
 
-/// Construct a single leaf command that converts in-process at `format`/`scale`.
-fn leaf(title: &str, format: Format, scale: Scale, icon: &[u16]) -> IExplorerCommand {
-    ExplorerCommand {
-        title: wide(title),
-        icon: icon.to_vec(),
-        has_subcommands: false,
-        action: Some(Action { format, scale }),
+/// Show a modal error dialog summarizing every failed conversion.
+fn report_outcome(outcome: &RunOutcome) {
+    let mut body = String::from("SVG Converter could not convert the following:\r\n\r\n");
+    body.push_str(&outcome.errors.join("\r\n"));
+    if !outcome.successes.is_empty() {
+        body.push_str(&format!(
+            "\r\n\r\n{} file(s) converted successfully.",
+            outcome.successes.len()
+        ));
     }
-    .into()
+    report_failure(&body);
 }
 
 /// Encode a Rust string as a null-terminated UTF-16 buffer.
@@ -384,11 +257,10 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(once(0)).collect()
 }
 
-/// Show a modal error dialog so context-menu failures are visible to the user.
+/// Show a modal error dialog.
 fn report_failure(message: &str) {
     let text = wide(message);
     let caption = wide("SVG Converter");
-    // SAFETY: both buffers are valid, null-terminated, and outlive the call.
     unsafe {
         MessageBoxW(
             None,
@@ -399,9 +271,7 @@ fn report_failure(message: &str) {
     }
 }
 
-/// Icon reference (`"<install-dir>\svg-converter.exe,0"`) or a single NUL if the
-/// install directory cannot be resolved. Used only for the menu glyph; no
-/// executable is ever launched.
+/// Icon reference for menu glyphs (`"<dir>\\svg-converter.exe,0"`).
 fn icon_reference() -> Vec<u16> {
     match dll_dir() {
         Some(dir) => {
@@ -412,10 +282,9 @@ fn icon_reference() -> Vec<u16> {
     }
 }
 
-/// Directory containing this DLL (used only to locate the icon resource).
+/// Directory containing this DLL (icon lookup only).
 fn dll_dir() -> Option<PathBuf> {
     let mut module = HMODULE::default();
-    // Resolve our own module from the address of this function.
     let addr = dll_dir as *const c_void;
     unsafe {
         GetModuleHandleExW(
@@ -438,22 +307,23 @@ fn dll_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use commands::{CLSID_CONVERT_SVG, COMMAND_DEFS};
 
-    /// Compiling and running this proves the cdylib is statically linked against
-    /// the `svg_converter` conversion core: the enum API below resolves through
-    /// the path dependency, so no runtime executable is needed.
     #[test]
     fn links_conversion_core() {
-        assert_eq!(Format::Png.extension(), "png");
-        assert_eq!(Format::Jpeg.extension(), "jpg");
-        assert_eq!(Scale::Two.factor(), 2.0);
+        assert_eq!(COMMAND_DEFS[0].format.extension(), "png");
+        assert_eq!(COMMAND_DEFS[0].scale.factor(), 1.0);
         assert_eq!(wide("a"), vec![0x61_u16, 0]);
     }
 
-    /// The flyout exposes Quick PNG 1× plus the full 3 formats × 4 scales matrix.
     #[test]
-    fn subcommand_matrix_has_expected_count() {
-        let icon = wide("");
-        assert_eq!(build_subcommands(&icon).len(), 1 + 3 * 4);
+    fn manifest_command_count() {
+        assert_eq!(COMMAND_DEFS.len(), 13);
+    }
+
+    #[test]
+    fn legacy_clsid_is_quick_png() {
+        assert_eq!(CLSID_CONVERT_SVG, COMMAND_DEFS[0].clsid);
+        assert_eq!(COMMAND_DEFS[0].verb_id, "QuickPng1x");
     }
 }

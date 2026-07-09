@@ -65,10 +65,15 @@ $packageName = 'SvgConverter.ContextMenu'
 $dllName = 'svg_converter_shell.dll'
 $guiExe = 'svg-converterw.exe'
 $consoleExe = 'svg-converter.exe'
+$expectedClsid = 'B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70'
+$expectedVerbCount = 13
+$handlerDllOldMaxBytes = 250000      # subprocess-era DLL (~138 KB)
+$handlerDllInProcessMinBytes = 1500000  # in-process DLL (~3 MB)
 
 $diagBase = Join-Path $env:LOCALAPPDATA 'SvgConverter'
 $sentinel = Join-Path $diagBase 'diagnostics.on'
 $logPath = Join-Path $diagBase 'logs\svg-converter.log'
+$tempLogPath = Join-Path $env:TEMP 'SvgConverter\svg-converter.log'
 
 function Write-Section {
     param([string] $Title)
@@ -162,16 +167,56 @@ if ($dirs.Count -eq 0) {
 
 # --- 2. Packaged (MSIX) Windows 11 handler -----------------------------------
 Write-Section 'Packaged (MSIX) handler'
+$pkg = Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue | Select-Object -First 1
 $pkgDir = $dirs | Where-Object { (Test-IsWindowsApps $_) -and (Test-Path -LiteralPath (Join-Path $_ $dllName)) } |
     Select-Object -First 1
 if ($pkgDir) {
-    Write-Host "Handler DLL present: $(Join-Path $pkgDir $dllName)"
-    Write-Host 'This handler now converts IN-PROCESS (inside the DLL). It does NOT'
-    Write-Host 'launch svg-converterw.exe, so there is no exe path to resolve and the'
-    Write-Host 'WindowsApps CreateProcessW/ERROR_ACCESS_DENIED problem no longer applies.'
+    $dllPath = Join-Path $pkgDir $dllName
+    $dllInfo = Get-Item -LiteralPath $dllPath
+  $dllBytes = $dllInfo.Length
+  Write-Host "Handler DLL: $dllPath"
+  Write-Host "    Size: $dllBytes bytes"
+  if ($dllBytes -lt $handlerDllOldMaxBytes) {
+    Write-Warning '    OLD subprocess-era DLL detected (~138 KB). Rebuild + reinstall package 1.0.1.0+ (in-process ~3 MB).'
+  } elseif ($dllBytes -ge $handlerDllInProcessMinBytes) {
+    Write-Host '    Generation: in-process handler (expected).' -ForegroundColor Green
+  } else {
+    Write-Warning '    Unexpected DLL size; rebuild and reinstall from current sources.'
+  }
+  if ($pkg) {
+    Write-Host "    Package version: $($pkg.Version)"
+    if ($pkg.Version -lt [version]'1.0.1.0') {
+      Write-Warning '    Package is older than 1.0.1.0 (flat manifest verbs fix). Uninstall and reinstall.'
+    }
+  }
+  Write-Host ''
+  Write-Host 'Handler model: each menu item is a manifest-registered verb with its own CLSID.'
+  Write-Host "Primary CLSID (Quick PNG 1x): $expectedClsid"
+  Write-Host "Expected verb count in manifest: $expectedVerbCount (flat list, no flyout)."
+  Write-Host ''
+  Write-Host 'If you still see a single "Convert SVG" flyout, Explorer is using an OLD package.'
+  Write-Host 'After 1.0.1.0 you should see items like "Quick: PNG (1x)", "PNG — 2.0x", etc.'
 } else {
     Write-Host 'No packaged handler DLL found under WindowsApps.'
     Write-Host '(Expected if you use the Classic/registry menu only.)'
+}
+
+# --- 2b. Packaged context-menu registration (registry view) ------------------
+Write-Section 'Packaged context-menu registration'
+$extRoot = 'HKCU:\Software\Classes\Extensions\ContractId\Windows.FileExplorerContextMenus'
+if (Test-Path -LiteralPath $extRoot) {
+    $hits = Get-ChildItem -LiteralPath $extRoot -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -like '*SvgConverter*' }
+    if ($hits) {
+        foreach ($h in $hits) {
+            Write-Host "Registered: $($h.Name)"
+        }
+    } else {
+        Write-Warning "No SvgConverter entries under $extRoot"
+        Write-Warning 'The MSIX context-menu extension may not be registered for this user.'
+    }
+} else {
+    Write-Host "No $extRoot (packaged menus not registered or HKCU path absent)."
 }
 
 # --- 3. Legacy registry cascade (Classic mode) -------------------------------
@@ -247,14 +292,47 @@ if ($pkg) {
 # --- 6. Diagnostics log -------------------------------------------------------
 Write-Section 'Diagnostics log'
 Write-Host "Sentinel: $sentinel (exists: $(Test-Path -LiteralPath $sentinel))"
-Write-Host "Log file: $logPath (exists: $(Test-Path -LiteralPath $logPath))"
+Write-Host "Log (primary): $logPath (exists: $(Test-Path -LiteralPath $logPath))"
+Write-Host "Log (TEMP fallback): $tempLogPath (exists: $(Test-Path -LiteralPath $tempLogPath))"
 if ($ShowLog) {
-    if (Test-Path -LiteralPath $logPath) {
-        Write-Host '--- last 40 lines ---'
-        Get-Content -LiteralPath $logPath -Tail 40
-    } else {
+    $shown = $false
+    foreach ($candidate in @($logPath, $tempLogPath)) {
+        if (Test-Path -LiteralPath $candidate) {
+            Write-Host "--- last 40 lines of $candidate ---"
+            Get-Content -LiteralPath $candidate -Tail 40
+            $shown = $true
+        }
+    }
+    if (-not $shown) {
         Write-Host 'No log yet. Run with -EnableLogging, reproduce from Explorer, then -ShowLog.'
     }
+}
+
+# --- 7. Handler invocation guidance --------------------------------------------
+Write-Section 'Handler invocation check'
+$logText = ''
+foreach ($candidate in @($logPath, $tempLogPath)) {
+    if (Test-Path -LiteralPath $candidate) {
+        $logText += (Get-Content -LiteralPath $candidate -Raw -ErrorAction SilentlyContinue)
+    }
+}
+if ($logText -match '\[dll\]') {
+    Write-Host 'Log contains [dll] lines — the handler DLL was loaded and/or invoked.' -ForegroundColor Green
+    if ($logText -match '\[dll\].*Invoke') {
+        Write-Host 'Invoke was reached. If conversion still fails, check err:/exit_code= lines.'
+    } elseif ($logText -match '\[dll\].*GetTitle|\[dll\].*DllGetClassObject|\[dll\].*DllMain') {
+        Write-Host 'DLL loaded (menu built) but no Invoke yet — click a leaf item like "Quick: PNG (1x)".'
+    }
+} else {
+    Write-Warning 'No [dll] lines in the log — the packaged handler was NEVER loaded or invoked.'
+    Write-Host 'Likely causes:'
+    Write-Host '  1. Old package still installed (flyout "Convert SVG" only) — uninstall + reinstall 1.0.1.0+'
+    Write-Host '  2. Explorer not restarted after install — run:  Stop-Process -Name explorer -Force'
+    Write-Host '  3. Clicking a flyout parent instead of a flat verb (1.0.1.0 shows flat items)'
+    Write-Host '  4. Use legacy menu: Install-SvgConverter.ps1 registers fallback under "Show more options"'
+    Write-Host ''
+    Write-Host 'After reinstall: right-click .svg -> pick "Quick: PNG (1x)" (not a submenu parent).'
+    Write-Host 'Re-run:  .\scripts\diagnose.ps1 -ShowLog'
 }
 
 Write-Host ''

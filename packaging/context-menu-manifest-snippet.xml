@@ -1,0 +1,22 @@
+<!--
+  Shared fragment for packaging/AppxManifest.xml and packaging/full/AppxManifest.xml.
+  Keep in sync with crates/svg-converter-shell/src/commands.rs (CLSID_BASE + index).
+
+  COM classes (all in svg_converter_shell.dll):
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A70  QuickPng1x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A71  Png3x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A72  Png2x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A73  Png1x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A74  Png05x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A75  Jpeg3x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A76  Jpeg2x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A77  Jpeg1x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A78  Jpeg05x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A79  Webp3x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7A  Webp2x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7B  Webp1x
+    B6E3A1C2-9F47-4D5E-8A1B-2C3D4E5F6A7C  Webp05x
+
+  Each verb is registered directly in the manifest (flat menu) so Win11 calls
+  IExplorerCommand::Invoke. Flyout subcommands via EnumSubCommands are NOT used.
+-->
