@@ -7,9 +7,34 @@ files in Windows Explorer, so you can turn an SVG into a **PNG**, **JPEG**, or
 This guide is for people installing a downloaded copy. If you are building from
 source, see the developer commands at the bottom.
 
+## Single-file setup executable (recommended for Windows 10)
+
+1. Download `SvgConverter-<version>-windows-x64-setup.exe` from the GitHub release.
+2. Double-click it and complete the setup wizard.
+3. Right-click any `.svg` file → **Convert SVG** → select a format and scale.
+
+Requires **Windows 10 version 1809 or newer, or Windows 11, 64-bit**. This setup
+installs into `%LOCALAPPDATA%\Programs\SvgConverter` for your current account.
+It needs no administrator access, certificate import, Developer Mode, Rust,
+or separate Visual C++ runtime. On Windows 11, the menu is under **Show more
+options**. The original SVG and its default application are unchanged.
+
+To uninstall this version, open **Settings → Apps → Apps & features** (Windows 10)
+or **Installed apps** (Windows 11), select **SVG Converter**, and click
+**Uninstall**. The native uninstaller removes the program and its menu entries;
+your converted images remain in their original folders.
+
+This setup executable is unsigned. Windows may show an unknown-publisher or
+SmartScreen prompt for a downloaded copy. Only run a copy from a source you trust.
+The adjacent `.sha256` release asset lets you compare the download's checksum
+using `Get-FileHash -Algorithm SHA256`.
+
+The remaining installation sections describe the optional **MSIX distribution**,
+which also supports the Windows 11 primary menu.
+
 ---
 
-## What you downloaded
+## MSIX: what you downloaded
 
 Inside the installer folder you should see something like:
 
@@ -29,7 +54,7 @@ bin\                              (used only by the no‑package fallback)
 
 ---
 
-## Install (recommended)
+## Install the MSIX package
 
 1. Open the installer folder in File Explorer.
 2. Right‑click **`Install-SvgConverter.ps1`** and choose **Run with PowerShell**.
@@ -70,8 +95,8 @@ recognizes.
   apps that aren’t yet widely downloaded. Choose **More info → Run anyway** if
   you trust the source.
 
-For a commercial release these prompts disappear once the package is signed with
-a certificate from a public authority (see
+Publicly trusted signing avoids the manual certificate trust step, but does not
+guarantee that SmartScreen will suppress all warnings (see
 [For distributors](#for-distributors-production-signing)).
 
 ---
@@ -132,8 +157,9 @@ The included certificate is for testing/sideloading only. For public release:
    ```powershell
    .\scripts\build-installer.ps1 -PfxPath C:\path\to\production.pfx
    ```
-   With a publicly trusted certificate, end users get **no certificate prompt
-   and no SmartScreen warning** — they can double‑click the `.msix` directly.
+   With a publicly trusted certificate, end users can double-click the `.msix`
+   without importing your certificate. SmartScreen reputation checks may still
+   display a warning.
 3. Optionally publish to the **Microsoft Store** or **winget** for one‑line
    installs.
 
@@ -143,6 +169,9 @@ The included certificate is for testing/sideloading only. For public release:
 
 ```powershell
 cd svg-converter
+# Produce the single-file EXE + SHA-256 checksum (Rust/MSVC + Inno Setup 6.3+/7):
+.\scripts\build-setup.ps1
+
 # Produce the signed MSIX + cert + scripts in target\installer:
 .\scripts\build-installer.ps1
 ```

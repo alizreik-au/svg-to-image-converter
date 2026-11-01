@@ -67,8 +67,20 @@ svg-converter convert "icon.svg" -o "C:\out\logo.png"
 
 ## Install (end users)
 
-The friendliest way to install is the **one‑file MSIX installer**. From the
-built `target\installer` folder, the user runs:
+Download **`SvgConverter-<version>-windows-x64-setup.exe`** from the GitHub
+release and double-click it. This installs for the current user on **Windows 10
+(1809+) or Windows 11, x64**, including an entry in Settings for uninstall.
+No admin prompt, certificate import, Developer Mode, or separate runtime is needed.
+
+Right-click an `.svg` file → **Convert SVG** → select PNG, JPEG, or WebP and a
+scale. On Windows 11, select **Show more options** first. The `.exe` installer
+uses the classic menu; the MSIX option below provides the Windows 11 primary menu.
+The setup executable is unsigned unless signed separately, so Windows may display
+an unknown-publisher or SmartScreen warning for downloaded copies.
+
+### Optional MSIX installation
+
+From the built MSIX `target\installer` folder, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Install-SvgConverter.ps1
@@ -93,6 +105,23 @@ instructions, including the certificate/SmartScreen explanation, are in
 
 ### Building the installer
 
+For a single setup executable suitable for a GitHub release, install
+[Inno Setup 6.3+ or 7](https://jrsoftware.org/isdl.php) and the Rust/MSVC toolchain:
+
+```powershell
+.\scripts\build-setup.ps1
+# target\installer\SvgConverter-<version>-windows-x64-setup.exe
+# target\installer\SvgConverter-<version>-windows-x64-setup.exe.sha256
+```
+
+Upload both files as release assets. The package version comes from
+`packaging\full\AppxManifest.xml`. This command uses `Cargo.lock`, builds the
+executables with a static C runtime in `target\setup-build`, includes dependency
+license notices, and packages the existing classic context-menu layout with a
+native uninstaller. Use `-IsccPath` for a compiler installed in a custom location.
+
+To build the separate MSIX distribution:
+
 ```powershell
 # Builds release binaries, packs a full MSIX (makeappx), signs it (signtool),
 # and stages the installer in target\installer:
@@ -102,7 +131,7 @@ instructions, including the certificate/SmartScreen explanation, are in
 
 Requires the Windows 10/11 SDK (`makeappx.exe`, `signtool.exe`). Use
 `-PfxPath <prod.pfx>` to sign with a production certificate instead of the
-self‑signed dev cert. This full MSIX is the distribution artifact; the sparse
+self‑signed dev cert. This full MSIX is a distribution artifact; the sparse
 package below remains a developer‑only convenience.
 
 ## Context menu (Phase 2)
