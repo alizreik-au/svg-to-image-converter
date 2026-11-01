@@ -5,9 +5,9 @@ Choose a format and size, and the image is saved beside your original SVG.
 
 **[Download the latest release](https://github.com/alizreik-au/svg-to-image-converter/releases/latest)** · [Installation guide](INSTALL.md) · [Report an issue](https://github.com/alizreik-au/svg-to-image-converter/issues)
 
-![Illustrated Windows context menu showing Convert SVG → PNG → 2.0x, producing logo@2x.png](docs/images/windows-context-menu.png)
+![Windows Explorer with SVG, JPG, PNG, and WebP files, and the Convert SVG → PNG → 1.0x context menu](docs/images/windows-context-menu.png)
 
-*Generated illustration of the Windows classic context menu; appearance may vary.*
+*AI-edited example based on supplied Windows screenshots; menu appearance may vary.*
 
 ## Install
 
