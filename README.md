@@ -22,6 +22,24 @@ The installer is unsigned, so Windows may show a SmartScreen or unknown-publishe
 
 To uninstall, open **Settings → Apps → SVG Converter → Uninstall**.
 
+### Windows 11 main context menu
+
+To show conversion actions in Windows 11's **main right-click menu**, install the
+**MSIX package**, which registers the Explorer extension with Windows. The current
+release includes the EXE installer only; you can build and install the MSIX yourself.
+
+Requires the Rust/MSVC build tools and the **Windows 10/11 SDK** (`makeappx.exe`
+and `signtool.exe`). Run these commands from the repository root using Windows PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\target\installer\Install-SvgConverter.ps1 -Mode Msix
+```
+
+The installer requests administrator permission to trust the locally generated
+signing certificate, then registers the package for your account. **Developer Mode
+is not required.** See the [MSIX installation guide](INSTALL.md#install-the-msix-package).
+
 ## Use it
 
 - **Quick: PNG (1x)** creates a PNG at the SVG's original size.

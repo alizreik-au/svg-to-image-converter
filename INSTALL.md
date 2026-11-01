@@ -50,7 +50,11 @@ bin\                              (used only by the no‑package fallback)
 ## Prerequisites
 
 - **Windows 10 (version 1809 or newer) or Windows 11**, 64‑bit.
-- No Rust, Node, ImageMagick, or other tools are needed — everything is included.
+- The MSIX manifest requires the **Microsoft VCLibs desktop framework**
+  (`Microsoft.VCLibs.140.00.UWPDesktop`, version **14.0.33728.0 or newer**) on the
+  target PC. The MSIX installer script does not install this dependency for you.
+- No Rust, Node, or ImageMagick is needed to run a built package. The EXE installer
+  described above includes its runtime and does not require this VCLibs package.
 
 ---
 
