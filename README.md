@@ -7,7 +7,6 @@ Choose a format and size, and the image is saved beside your original SVG.
 
 ![Windows Explorer with SVG, JPG, PNG, and WebP files, and the Convert SVG → PNG → 1.0x context menu](docs/images/svgconverter.webp)
 
-*AI-edited example based on supplied Windows screenshots; menu appearance may vary.*
 
 ## Install
 
